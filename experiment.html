@@ -7,6 +7,7 @@
   <script src="jspsych/plugin-html-keyboard-response.js"></script>
   <script src="jspsych/plugin-html-button-response.js"></script>
   <script src="jspsych/plugin-preload.js"></script>
+  <script src="jspsych/plugin-instructions.js"></script>
   <link href="jspsych/jspsych.css" rel="stylesheet" type="text/css" />
   <link href="vigour_styles.css" rel="stylesheet" type="text/css" />
   <script src="vigour_instructions.js"></script>
@@ -14,7 +15,7 @@
 </head>
 
 <body>
-  <div id="jspsych-content"></div>
+  <div id="persist-coin-container"></div>
   <script>
     const jsPsych = initJsPsych({
       on_finish: function () {
@@ -45,16 +46,27 @@
     // Preload images
     var preload = {
       type: jsPsychPreload,
-      images: ["1p.png", "2p.png", "5p.png", "10p.png", "20p.png", "50p.png", "100p.png", "200p.png", "piggy-bank.png", "ooc_2p.png"].map(s => "imgs/" + s)
+      images: ["1p-num.png", "2p-num.png", "5p-num.png", "10p-num.png", "piggy-bank.png", "ooc_2p.png", "piggy-tail2.png", "saturate-icon.png", "tail-icon.png"].map(s => "imgs/" + s)
     };
+
+    const instructions = {
+      timeline: [instructionPage, ruleInstruction, startConfirmation],
+      loop_function: function (data) {
+        const last_iter = data.last(1).values()[0];
+        if (jsPsych.pluginAPI.compareKeys(last_iter.response, 'r')) {
+          return true;
+        } else {
+          return false;
+        }
+      }
+    }
 
     // Combine all parts into the full timeline
     const fullTimeline = [
       preload,
-      instructionPage,
-      startFirstTrial,
+      instructions,
       ...experimentTimeline,
-      debriefing
+      vigour_bonus
     ];
 
     // Run the experiment
