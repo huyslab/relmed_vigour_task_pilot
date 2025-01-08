@@ -1,0 +1,314 @@
+---
+title: "Experiment settings"
+author: "Haoyang LU"
+date: last-modified
+format:
+  html:
+    embed-resources: true
+editor: visual
+editor_options: 
+  chunk_output_type: inline
+---
+
+## Conversion method
+
+```{r}
+library(tidyverse)
+# Function to convert pennies to the largest possible coin denominations and return a data.frame
+convert_to_coins_df <- function(pennies, selection = c(1, 2, 5, 10, 20, 50, 100, 200)) {
+  # Coin denominations in pennies
+  coins <- c(200, 100, 50, 20, 10, 5, 2, 1)
+  selected_coins <- coins %in% selection
+  coin_names <- c("£2 coin", "£1 coin", "50p coin", "20p coin", "10p coin", "5p coin", "2p coin", "1p coin")
+  
+  # Vector to store the count of each coin
+  coin_count <- integer(length(coins[selected_coins]))
+  
+  # Iterate over each denomination
+  for (i in seq_along(coins[selected_coins])) {
+    coin_count[i] <- pennies %/% coins[selected_coins][i]
+    pennies <- pennies %% coins[selected_coins][i]
+  }
+  
+  # Create a data.frame
+  result_df <- data.frame(coin = coin_names[selected_coins], value = coins[selected_coins], count = coin_count)
+  
+  # Filter to show only coins with non-zero count
+  # result_df <- result_df[result_df$Count > 0, ]
+  
+  return(result_df)
+}
+
+# Example usage
+convert_to_coins_df(129, selection = c(1, 2, 5, 10, 20, 50, 100))
+
+```
+
+```{r}
+calc_total_pennies <- function(magnitudes,
+                               ratios,
+                               trial_length = 6000,
+                               rt = 200) {
+    response_times <- trial_length / rt
+    reward_times <- response_times %/% ratios
+    total_reward <- tcrossprod(reward_times, magnitudes) |> sum()
+    return(total_reward)
+}
+
+calc_total_pennies(
+    magnitudes = c(10, 5, 2, 1),
+    ratios = c(1, seq(2, 36, by = 2)),
+    rt = 120
+) %>%
+    convert_to_coins_df(selection = c(1, 2, 5, 10, 20, 50, 100))
+
+
+```
+
+```{r}
+selects <- c(1, 2, 5, 10, 20, 50, 100)
+mags <- c(10, 5, 2, 1)
+FRs <- c(1, seq(2, 36, by = 2))
+calc_expected_bonus <- function(rt) {
+    calc_total_pennies(
+        magnitudes = mags,
+        ratios = FRs,
+        rt = rt
+    ) %>%
+        convert_to_coins_df(selection = selects) %>%
+        summarize(expected_bonus = sum(value * count / sum(count)) / 100) %>%
+        pull(expected_bonus)
+}
+
+rt_df <- tibble(rt = seq(100, 500, by = 10))
+p_bonus_prop <- rt_df %>%
+    mutate(coin_df = map(rt, ~ {
+        calc_total_pennies(
+            magnitudes = mags,
+            ratios = FRs,
+            rt = .x
+        ) %>%
+            convert_to_coins_df(selection = selects)
+    })) %>%
+    unnest(coin_df) %>%
+    ggplot(aes(x = rt, y = count, fill = ordered(value))) +
+    geom_area(position = "fill") +
+    geom_line(
+        data = rt_df %>%
+            rowwise() %>%
+            mutate(expected_bonus = calc_expected_bonus(rt)) %>%
+            ungroup(),
+        aes(x = rt, y = expected_bonus),
+        color = "white",
+        inherit.aes = F
+    ) +
+    scale_fill_viridis_d(option = "D", direction = -1, labels = ~ paste0(.x, "p")) +
+    scale_y_continuous(labels = scales::percent, sec.axis = sec_axis(trans = identity, name = "Average bonus amount (£)")) +
+    labs(x = "Inter-press latency (ms)",
+         y = "Bonus coin proportion",
+         caption = "White line: Avg. bonus based on the conversion/sample method",
+         fill = "Coin type")
+
+p_bonus_count <- rt_df %>%
+    mutate(coin_df = map(rt, ~ {
+        calc_total_pennies(
+            magnitudes = mags,
+            ratios = FRs,
+            rt = .x
+        ) %>%
+            convert_to_coins_df(selection = selects)
+    })) %>%
+    unnest(coin_df) %>%
+    ggplot(aes(x = rt, y = count, fill = ordered(value))) +
+    geom_col() +
+    scale_fill_viridis_d(option = "D", direction = -1, labels = ~ paste0(.x, "p")) +
+    labs(x = "Response time of each keypress (ms)",
+         y = "Bonus coin count",
+         fill = "Coin type")
+
+library(patchwork)
+p_bonus_prop + p_bonus_count + plot_layout(guides = "collect")
+
+```
+
+## Sampling from one trial method
+
+```{r}
+mag_fr_df <- expand_grid(mag = c(5, 2, 1), fr = c(1, 8, 16)) %>%
+    mutate(rpp = mag / fr)
+
+dlognorm <- function(x, mean, sd) {
+    1 / (x * sd * sqrt(2 * pi)) * exp(-(log(x) - mean) ^ 2 / (2 * sd ^ 2))
+}
+
+mean <- log(40)
+sd <- 0.3
+ggplot() +
+    xlim(0.1, 100) +
+    geom_function(fun = dlognorm, args = list(mean = mean, sd = sd))
+ggplot() +
+    xlim(0.1, 100) +
+    geom_function(fun = plnorm, args = list(meanlog = mean, sdlog = sd))
+
+cat("Mean: ", exp(mean + sd ^ 2 / 2), "\n")
+cat("Median: ", exp(mean), "\n")
+cat("Mode: ", exp(mean - sd ^ 2), "\n")
+cat("SD: ", sqrt((exp(sd ^ 2) - 1) * exp(2 * mean + sd ^ 2)), "\n")
+
+mag_fr_df %>%
+    # filter(rpp <= 2.5) %>%
+    mutate(
+        press_times = (7000 / 150) %/% fr,
+        reward = mag * press_times,
+        biased_reward = (reward)
+    ) %>%
+    mutate(prob = dlognorm(reward, mean, sd) / sum(dlognorm(reward, mean, sd))) %>%
+    summarize(avg_bonus = sum(reward * prob))
+
+```
+
+## Reward per press by trial
+
+```{r}
+library(furrr)
+plan(multisession)
+
+rpp_df <- mag_fr_df %>%
+    # filter(rpp <= 2.5)
+    identity()
+set.seed(12345)
+rpp_df2 <- bind_rows(rpp_df, rpp_df, rpp_df, rpp_df, .id = "rep") %>% 
+    mutate(trial = row_number()) %>% 
+    mutate(trialDuration = runif(n(), 6500, 7500))
+
+rpp_by_trial_list <- 
+    future_map(1:100000, function(x) {
+        rpp_example_df <- rpp_df2 %>%
+            filter(rep == "1", rpp %in% c(0.0625, 0.25, 1, 5)) %>% 
+            group_by(rpp) %>% 
+            slice_sample(n = 1) %>% 
+            ungroup() %>% 
+            slice_sample(prop = 1)
+        rpp_rest_df <- 
+            anti_join(rpp_df2, rpp_example_df, 
+                      by = join_by(rep, mag, fr, trial)) %>% 
+            slice_sample(prop = 1, by = rep)
+        bind_rows(rpp_example_df, rpp_rest_df) %>% 
+            mutate(trial = row_number())
+        }, 
+    .options = furrr_options(seed = 12345))
+
+rpp_by_trial_ac <- rpp_by_trial_list %>%
+    future_map_dbl(
+        .f = function(x) {
+            arrange(x, trial) %>%
+                pull(rpp) %>%
+                acf(plot = F) %>%
+                pluck("acf") %>%
+                {.[2]}
+        }, .options = furrr_options(seed = 12345)
+    )
+
+which.min(abs(rpp_by_trial_ac))
+rpp_by_trial_ac[which.min(abs(rpp_by_trial_ac))]
+
+rpp_by_trial_list[[which.min(abs(rpp_by_trial_ac))]] %>%
+    ggplot(aes(x = trial, y = rpp, color = trial <= 4)) +
+    geom_point(aes(size = ordered(mag))) +
+    geom_line(linewidth = 0.8) +
+    scale_color_brewer(
+        type = "qual",
+        breaks = c(TRUE, FALSE),
+        labels = c("First four trials", "The rest")
+    ) +
+    scale_size_discrete(range = c(1, 4)) +
+    labs(x = "Trial",
+         y = "Reward per press",
+         size = "Reward magnitude",
+         color = "") +
+    theme_minimal()
+
+```
+
+```{r}
+rpp_by_trial_list[[which.min(abs(rpp_by_trial_ac))]] %>% 
+    arrange(trial) %>% 
+    select(magnitude = mag, ratio = fr, trialDuration) %>% 
+    mutate(trialDuration = round(trialDuration)) %>% 
+    jsonlite::toJSON(dataframe = "rows")
+```
+
+## Post-vigour test sequence
+
+```{r}
+
+# Based on orthogonal array OA(9, 3, 3, 2)
+oa_combs <- c("1_5", "2_6", "3_4", "7_8", "9_1", "5_2", "6_3", "4_7", "8_9")
+
+pre_cb_df <- expand_grid(
+    mag_fr_df %>% 
+        mutate(comb = row_number()) %>%
+        rename_with(.fn = ~ paste0(.x, "_left")),
+    mag_fr_df %>% 
+        mutate(comb = row_number()) %>%
+        rename_with(.fn = ~ paste0(.x, "_right"))
+) %>% 
+    filter(comb_left != comb_right) %>% 
+    mutate(combs = map2_chr(comb_left, comb_right, ~ paste0(sort(c(.x, .y)), collapse = "_"))) %>% 
+    filter(paste(comb_left, comb_right, sep = "_") %in% oa_combs)
+
+sample_flag <- T
+set.seed(12345)
+# while (sample_flag) {
+#     post_cb_df <- pre_cb_df %>% 
+#     slice_sample(n = 1, by = combs) 
+#     if (mean(post_cb_df$rpp_left >= post_cb_df$rpp_right) == 0.5) {
+#         sample_flag <- F
+#         post_cb_df <- sample_frac(post_cb_df, 1)
+#     }
+# }
+post_cb_df <- slice_sample(pre_cb_df, n = 1, by = combs) 
+
+post_cb_df %>%
+    select(starts_with("mag_"), starts_with("fr")) %>%
+    rowwise() %>%
+    mutate(json_string = jsonlite::toJSON(list(
+        left = list(magnitude = mag_left, ratio = fr_left),
+        right = list(magnitude = mag_right, ratio = fr_right)
+    ), auto_unbox = TRUE)) %>% 
+    ungroup() %>%
+    pull(json_string) %>% 
+    str_c(collapse = ",\n") %>% 
+    cat()
+
+```
+
+#### Manually curated
+
+```{r}
+set.seed(12345)
+tibble::tribble(
+  ~trial, ~mag_left, ~fr_left, ~mag_right, ~fr_right, ~rpp_left, ~rpp_right, ~easy,
+  1L,     1,         8,        2,          1,         0.125,     2,          TRUE,
+  2L,     2,         16,       5,          8,         0.125,     0.625,      TRUE,
+  3L,     5,         1,        1,          16,        5,         0.0625,     TRUE,
+  4L,     1,         16,       5,          1,         0.0625,    5,          TRUE,
+  5L,     2,         8,        1,          16,        0.25,      0.0625,     TRUE,
+  6L,     5,         8,        2,          16,        0.625,     0.125,      TRUE,
+  7L,     1,         1,        5,          8,         1,         0.625,      FALSE,
+  8L,     2,         1,        1,          8,         2,         0.125,      TRUE,
+  9L,     5,         16,       2,          1,         0.3125,    2,          FALSE,
+) %>% 
+    slice_sample(prop = 1) %>%
+    select(starts_with("mag_"), starts_with("fr")) %>%
+    rowwise() %>%
+    mutate(json_string = jsonlite::toJSON(list(
+        left = list(magnitude = mag_left, ratio = fr_left),
+        right = list(magnitude = mag_right, ratio = fr_right)
+    ), auto_unbox = TRUE)) %>% 
+    ungroup() %>%
+    pull(json_string) %>% 
+    str_c(collapse = ",\n") %>% 
+    cat()
+
+```
